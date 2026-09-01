@@ -39,6 +39,20 @@ Registers a Windows task at 07:00 IST that refreshes your local copy only. Remov
 Unregister-ScheduledTask -TaskName "FluidQ US Daily Refresh" -Confirm:$false
 ```
 
+## Copy for TradingView
+
+The **Copy for TradingView** button copies whatever is currently filtered, in TradingView's
+own format: exchange-prefixed and comma-separated, e.g. `NASDAQ:SNDK,NYSE:DELL,...`.
+
+Paste it straight into the watchlist symbol box, or save it as a `.txt` and use
+Watchlist -> the `...` menu -> **Import watchlist**.
+
+Two details it handles so the paste never half-fails: share classes are converted to
+TradingView's dot notation (`BRK-B` becomes `NYSE:BRK.B`), and any ticker whose exchange
+can't be determined is emitted bare so TradingView resolves it to the primary listing.
+If your browser blocks clipboard access, the text appears in a box, pre-selected, to copy
+by hand.
+
 ## Files
 
 | File | What it does |

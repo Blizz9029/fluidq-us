@@ -79,6 +79,32 @@ button{font:inherit; color:inherit}
   padding:6px 11px; cursor:pointer; font-size:12px; font-weight:500;
 }
 .iconbtn:hover{background:var(--sunken); border-color:var(--accent)}
+.iconbtn.accent{border-color:var(--accent); color:var(--accent); font-weight:600}
+.iconbtn.accent:hover{background:var(--accent); color:var(--accent-ink)}
+
+/* Fallback when the browser blocks clipboard writes (some embeds do). */
+.sheet{
+  position:fixed; inset:0; z-index:70; display:none;
+  align-items:center; justify-content:center; padding:22px;
+  background:rgba(10,10,16,.55); backdrop-filter:blur(2px);
+}
+.sheet[open]{display:flex}
+.sheet-box{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow); padding:18px; width:min(640px,100%);
+  display:flex; flex-direction:column; gap:11px;
+}
+.sheet-box h3{font-size:15px}
+.sheet-box p{margin:0; font-size:12.5px; color:var(--muted)}
+.sheet-box textarea{
+  width:100%; height:150px; resize:vertical; padding:10px;
+  border:1px solid var(--line); border-radius:7px;
+  background:var(--surface-2); color:var(--ink);
+  font-family:var(--mono); font-size:12px; line-height:1.6;
+}
+.sheet-box textarea:focus{outline:none; border-color:var(--accent)}
+.sheet-actions{display:flex; gap:9px; justify-content:flex-end}
+
 .stale{
   font-family:var(--sans); font-size:11.5px; font-weight:600;
   color:var(--down); background:var(--down-soft);
@@ -223,6 +249,7 @@ tbody tr:last-child td{border-bottom:0}
       <span>Universe <b id="m-uni">&#x2014;</b></span>
       <span>Built <b id="m-built">&#x2014;</b></span>
       <button class="iconbtn" id="btn-theme">Theme</button>
+      <button class="iconbtn accent" id="btn-tv">Copy for TradingView</button>
       <button class="iconbtn" id="btn-csv">Copy CSV</button>
       <button class="iconbtn" id="btn-reset">Reset to Fluid Q</button>
     </div>
@@ -417,6 +444,19 @@ tbody tr:last-child td{border-bottom:0}
 <div class="foot">
   <p><b>How this maps to your NSE screen.</b> Every calculation is unchanged: absolute return over N months is the last close against the last close on or before the calendar lookback date; the ranking factor is the plain average of the 12-month and 6-month absolute returns; median daily volume is the median of close &#x00D7; volume over the last 252 sessions; percentage of positive days is the share of sessions with a positive close-to-close move. Prices are split-adjusted and dividend-unadjusted, so returns are price returns, matching NSE convention. Rupee-denominated thresholds were restated in dollars &#x2014; volume, market cap and price &#x2014; because the units differ; the formulas behind them did not change. The <b>Series EQ/BE</b> toggle has no US counterpart and is dropped.</p>
   <p>Data: Yahoo Finance daily bars and quotes, refreshed after each US close. Beta is against SPY. For research and screening only &#x2014; not investment advice, and not a recommendation to buy or sell anything.</p>
+</div>
+
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div class="sheet-box">
+    <h3 id="sheet-title">Copy these into TradingView</h3>
+    <p>Your browser blocked the clipboard, so here it is to copy by hand &#x2014; it is already
+       selected, just press Ctrl+C.</p>
+    <textarea id="sheet-text" readonly spellcheck="false"></textarea>
+    <div class="sheet-actions">
+      <button class="iconbtn" id="sheet-retry">Try copying again</button>
+      <button class="iconbtn accent" id="sheet-close">Done</button>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -733,6 +773,55 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 1900);
 }
 
+/* Copy helper: clipboard API, then execCommand, then a visible textarea so the
+   text is always reachable no matter how locked down the browser is. */
+async function copyOut(text, okMsg){
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(okMsg);
+    return true;
+  } catch (e) { /* fall through */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-9999px;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (ok) { toast(okMsg); return true; }
+  } catch (e) { /* fall through */ }
+  openSheet(text);
+  return false;
+}
+
+function openSheet(text){
+  const s = $("sheet"), t = $("sheet-text");
+  t.value = text;
+  s.setAttribute("open", "");
+  t.focus(); t.select();
+}
+function closeSheet(){ $("sheet").removeAttribute("open"); }
+$("sheet-close").addEventListener("click", closeSheet);
+$("sheet").addEventListener("click", e => { if (e.target === $("sheet")) closeSheet(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+$("sheet-retry").addEventListener("click", async () => {
+  const t = $("sheet-text");
+  t.select();
+  try { await navigator.clipboard.writeText(t.value); closeSheet(); toast("Copied"); }
+  catch (e) { toast("Still blocked \\u2014 press Ctrl+C with the text selected"); }
+});
+
+/* TradingView: exchange-prefixed, comma-separated - what its watchlist import wants. */
+function tvList(){
+  // Yahoo writes share classes with a dash (BRK-B); TradingView wants a dot (BRK.B).
+  return current.map(r => (r.x ? r.x + ":" : "") + r.s.replace("-", ".")).join(",");
+}
+$("btn-tv").addEventListener("click", () => {
+  if (!current.length) { toast("Nothing to copy \\u2014 no stocks match"); return; }
+  copyOut(tvList(), current.length + " symbols copied for TradingView");
+});
+
 $("btn-csv").addEventListener("click", async () => {
   const head = ["Rank","Ticker","Company","Sector","Indices","Price","MarketCap","Ret1Y","Ret9M","Ret6M","Ret3M","Ret1M",
                 "AvgRet12_6","EMA50","SMA50","EMA200","SMA200","BelowATH","Below52WHigh","MedDailyDollarVol",
@@ -741,8 +830,7 @@ $("btn-csv").addEventListener("click", async () => {
     r.px, r.mcap, r.r12M, r.r9M, r.r6M, r.r3M, r.r1M, r.rAvg126, r.ema50, r.sma50, r.ema200, r.sma200,
     r.dATH, r.d52, r.mdv, r.p12M, r.beta, r.vol, r.pe].map(v => v == null ? "" : v).join(",");
   const csv = [head.join(","), ...current.map(line)].join("\n");
-  try { await navigator.clipboard.writeText(csv); toast(current.length + " rows copied as CSV"); }
-  catch (e) { toast("Clipboard blocked \u2014 use the CSV in fluidq_us/data/"); }
+  copyOut(csv, current.length + " rows copied as CSV");
 });
 
 const DEFAULTS = {

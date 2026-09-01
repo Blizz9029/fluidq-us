@@ -114,6 +114,24 @@ def _f(x) -> float | None:
     return None if (math.isnan(v) or math.isinf(v)) else v
 
 
+def tv_exchange(name: str | None) -> str | None:
+    """Yahoo's exchange name -> the prefix TradingView expects (NASDAQ:AAPL).
+    Returns None when unrecognised, so the symbol is emitted bare and
+    TradingView resolves it itself."""
+    n = (name or "").lower()
+    if "nasdaq" in n:
+        return "NASDAQ"
+    if "american" in n or "amex" in n or "arca" in n:
+        return "AMEX"
+    if "nyse" in n:
+        return "NYSE"
+    if "bats" in n or "bzx" in n:
+        return "BATS"
+    # "Cboe US" and anything else unrecognised: emit the ticker bare and let
+    # TradingView resolve it to the primary listing (CBOE -> CBOE:CBOE).
+    return None
+
+
 def _r(x, nd: int = 2) -> float | None:
     v = _f(x)
     return None if v is None else round(v, nd)
@@ -237,6 +255,7 @@ def compute(uni: dict[str, dict], px: pd.DataFrame, ath: dict[str, float],
         # --- fundamentals from the live quote ---------------------------------
         rec["mcap"] = _r(q.get("marketCap"), 0)
         rec["pe"] = _r(q.get("trailingPE"))
+        rec["x"] = tv_exchange(q.get("fullExchangeName"))
 
         rows.append(rec)
 
