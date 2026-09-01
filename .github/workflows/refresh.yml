@@ -1,0 +1,52 @@
+name: Refresh screener
+
+on:
+  schedule:
+    # 23:00 UTC daily = 7pm ET, three hours after the US close, so quotes
+    # and the day's bars have fully settled. 04:30 IST the next morning.
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Build screener data + site
+        run: python build.py
+
+      - name: Verify the build is fresh and complete
+        run: python verify.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
