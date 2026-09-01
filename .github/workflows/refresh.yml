@@ -8,9 +8,13 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # Without this the archive commit below would retrigger the workflow forever.
+    paths-ignore:
+      - "data/screen.json"
+      - "README.md"
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -22,9 +26,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -37,7 +41,19 @@ jobs:
       - name: Verify the build is fresh and complete
         run: python verify.py
 
-      - uses: actions/upload-pages-artifact@v3
+      # Commits the day's metrics back to main. Two reasons: it builds a
+      # point-in-time archive (what "Historical Ranks" would need), and the
+      # commit counts as repo activity, so GitHub never disables the cron
+      # for inactivity.
+      - name: Archive today's data
+        run: |
+          git config user.name "fluidq-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/screen.json
+          git diff --staged --quiet || git commit -m "data: refresh $(date -u +%Y-%m-%d)"
+          git push
+
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: dist
 

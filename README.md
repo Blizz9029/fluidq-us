@@ -1,25 +1,39 @@
 # Fluid Q — US
 
+**Live: https://blizz9029.github.io/fluidq-us/**
+
 Your NSE **FLUID Q – 50EMA** screen, ported to the S&P 500 + Nasdaq 100 with live data.
 Every calculation is unchanged; only the currency-denominated thresholds were restated in dollars.
 
-## Run it
+Rebuilds itself every day at 23:00 UTC (04:30 IST) via GitHub Actions — about three hours
+after the US close, so each run uses a fully settled session. Nothing runs on your machine.
+A build that comes back stale or thin fails `verify.py` and is never deployed, so the site
+keeps serving the last good data rather than wrong data.
+
+## Run it locally
+
+Optional — the hosted site is the source of truth. Useful for poking at the raw numbers.
 
 ```powershell
 python build.py        # pull fresh data + rebuild the site  (~3 min)
 python render.py       # rebuild the site from cached data   (instant)
+python verify.py       # run the same freshness checks CI runs
 start dist\index.html  # open it
 ```
 
-## Daily refresh
+To force the hosted site to rebuild right now, without waiting for the cron:
+
+```powershell
+gh workflow run "Refresh screener" --repo Blizz9029/fluidq-us
+```
+
+### Local scheduled task (not needed if you use the hosted site)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-daily-task.ps1
 ```
 
-Registers a Windows scheduled task at **07:00 IST** — after the US close (16:00 ET = 01:30 IST),
-so every run picks up a fully settled session. If the PC is off it catches up at next login.
-Logs land in `logs\`. Remove it with:
+Registers a Windows task at 07:00 IST that refreshes your local copy only. Remove it with:
 
 ```powershell
 Unregister-ScheduledTask -TaskName "FluidQ US Daily Refresh" -Confirm:$false
@@ -32,6 +46,7 @@ Unregister-ScheduledTask -TaskName "FluidQ US Daily Refresh" -Confirm:$false
 | `universe.py` | S&P 500 + Nasdaq 100 constituents from Wikipedia, cached as a fallback |
 | `build.py` | Downloads 2y daily OHLCV, quotes and all-time highs; computes every metric |
 | `render.py` | Inlines `data/screen.json` into `template.html` → `dist/index.html` |
+| `verify.py` | Build gate: fails CI if the data is stale, thin or malformed, so bad data is never deployed |
 | `template.html` | The site. All filtering happens in the browser, so toggles are instant |
 | `data/screen.json` | Raw metrics, one record per stock |
 | `data/screen.csv` | Same thing as a spreadsheet |
