@@ -77,7 +77,7 @@ by hand.
 | Distance below ATH | All-time high from full-history monthly bars; 0% means sitting at the high |
 | Distance below 1Y high | Highest daily high of the last 252 sessions |
 | Positive days % | Share of sessions in the window with a positive close-to-close move |
-| Beta | 1 year of daily returns against SPY |
+| Beta | **5-year monthly** vs SPY — Yahoo's published figure; the identical calculation where Yahoo has none; weekly returns for listings under 2 years old (marked † on the site) |
 | Volatility | Stdev of daily returns × √252 |
 | P/E | Trailing, from the live quote |
 
@@ -96,13 +96,21 @@ Formulas are identical. Only these thresholds changed units:
 
 Change any of these in the UI — the site never hard-codes them.
 
-## Two judgement calls worth knowing
+## Judgement calls worth knowing
 
 1. **EMA vs SMA.** Your screen is named *50EMA* but the FluidQ toggle reads "Above 50-day MA".
    Both are computed; the UI defaults to **EMA** to match the screen name. Flip it in the
    Moving Average card. On today's data it's the difference between 139 and 134 matches.
 2. **"Ignore top beta / volatility stocks."** FluidQ doesn't state the cut-off, so it's exposed
    as *drop the top N%*, defaulting to 10%. The explicit **beta ceiling** (1.25) is exact.
+3. **Beta is 5-year monthly, not 1-year daily.** The first version used one year of daily
+   returns. During the 2025–26 AI rally that put ~95 S&P names below zero — KO, XOM, JNJ,
+   most utilities and staples — because on the days tech lifted the index, those sectors
+   fell. The arithmetic was right, but a number that flips sign with each regime is useless
+   as a risk filter. Five-year monthly is the published standard (Yahoo's "Beta (5Y
+   Monthly)"); our own calculation matches Yahoo's at 0.995 correlation. `verify.py` fails
+   the build if negative betas climb past 10, or if published and calculated betas stop
+   agreeing.
 
 Not ported: *Historical Ranks* (needs point-in-time snapshots — the data would have to be
 accumulated day by day from here) and *Custom Filters* (undefined slots in FluidQ).

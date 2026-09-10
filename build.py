@@ -36,6 +36,12 @@ TRADING_DAYS_1Y = 252
 LOOKBACKS = {"1M": 30, "3M": 91, "6M": 183, "9M": 274, "12M": 365}
 MA_PERIODS = (20, 50, 100, 200)
 
+# Beta follows the published standard: 60 monthly returns against the index.
+BETA_MONTHS = 60
+MIN_BETA_MONTHS = 24       # below this, fall back to weekly returns
+BETA_WEEKS = 104
+MIN_BETA_WEEKS = 52
+
 
 # --------------------------------------------------------------------------- io
 
@@ -51,9 +57,11 @@ def fetch_prices(symbols: list[str]) -> pd.DataFrame:
     return df
 
 
-def fetch_ath(symbols: list[str], chunk: int = 60) -> dict[str, float]:
-    """All-time high from full-history monthly bars (cheap: ~600 rows/ticker)."""
-    out: dict[str, float] = {}
+def fetch_monthly(symbols: list[str], chunk: int = 60) -> tuple[dict[str, float], pd.DataFrame]:
+    """Full-history monthly bars (cheap: ~600 rows/ticker). Supplies the
+    all-time high and the month-end closes the 5-year beta is built from."""
+    ath: dict[str, float] = {}
+    closes: dict[str, pd.Series] = {}
     for i in range(0, len(symbols), chunk):
         part = symbols[i : i + chunk]
         try:
@@ -61,28 +69,38 @@ def fetch_ath(symbols: list[str], chunk: int = 60) -> dict[str, float]:
                 part, period="max", interval="1mo", auto_adjust=False,
                 progress=False, threads=True, group_by="column",
             )
-            high = d["High"] if isinstance(d.columns, pd.MultiIndex) else d[["High"]]
-            if isinstance(high, pd.Series):
-                high = high.to_frame(part[0])
+
+            def field(name: str) -> pd.DataFrame:
+                if isinstance(d.columns, pd.MultiIndex):
+                    f = d[name]
+                    return f.to_frame(part[0]) if isinstance(f, pd.Series) else f
+                return d[[name]].set_axis([part[0]], axis=1)
+
+            high, close = field("High"), field("Close")
             for s in part:
                 if s in high.columns:
                     v = high[s].max()
                     if pd.notna(v) and v > 0:
-                        out[s] = float(v)
+                        ath[s] = float(v)
+                if s in close.columns:
+                    c = close[s].dropna()
+                    if len(c):
+                        closes[s] = c
         except Exception as e:  # noqa: BLE001
-            print(f"[ath] chunk {i} failed: {e}")
-        print(f"[ath] {min(i + chunk, len(symbols))}/{len(symbols)}", end="\r")
-    print(f"\n[ath] resolved {len(out)}/{len(symbols)}")
-    return out
+            print(f"[monthly] chunk {i} failed: {e}")
+        print(f"[monthly] {min(i + chunk, len(symbols))}/{len(symbols)}", end="\r")
+    print(f"\n[monthly] resolved {len(ath)}/{len(symbols)}")
+    return ath, pd.DataFrame(closes)
 
 
 def fetch_quotes(symbols: list[str], chunk: int = 100) -> dict[str, dict]:
-    """Batch Yahoo quote: market cap, shares, trailing P/E, 52w high, exchange."""
+    """Batch Yahoo quote: market cap, shares, trailing P/E, 52w high, exchange,
+    and the published 5-year monthly beta."""
     yfd = YfData()
     fields = ",".join([
         "symbol", "marketCap", "sharesOutstanding", "trailingPE", "forwardPE",
         "regularMarketPrice", "fiftyTwoWeekHigh", "fullExchangeName", "quoteType",
-        "longName", "shortName",
+        "longName", "shortName", "beta",
     ])
     out: dict[str, dict] = {}
     for i in range(0, len(symbols), chunk):
@@ -112,6 +130,17 @@ def _f(x) -> float | None:
     except (TypeError, ValueError):
         return None
     return None if (math.isnan(v) or math.isinf(v)) else v
+
+
+def ols_beta(returns: pd.DataFrame, sym: str, n: int, min_n: int) -> float | None:
+    """cov(stock, benchmark) / var(benchmark) over the last n paired periods."""
+    if sym not in returns.columns or BENCHMARK not in returns.columns:
+        return None
+    j = returns[[sym, BENCHMARK]].dropna().tail(n)
+    if len(j) < min_n:
+        return None
+    bv = j[BENCHMARK].var()
+    return float(j[sym].cov(j[BENCHMARK]) / bv) if bv else None
 
 
 def tv_exchange(name: str | None) -> str | None:
@@ -167,14 +196,16 @@ def positive_days_pct(close: pd.Series, days: int) -> float | None:
 
 
 def compute(uni: dict[str, dict], px: pd.DataFrame, ath: dict[str, float],
-            quotes: dict[str, dict]) -> list[dict]:
+            quotes: dict[str, dict], monthly: pd.DataFrame) -> list[dict]:
     close_all = px["Close"]
     high_all = px["High"]
     vol_all = px["Volume"]
 
-    # benchmark daily returns for beta
-    bench = close_all[BENCHMARK].dropna() if BENCHMARK in close_all.columns else pd.Series(dtype=float)
-    bench_ret = bench.pct_change(fill_method=None).dropna().tail(TRADING_DAYS_1Y)
+    # Monthly returns for the 5-year beta. Yahoo sometimes appends today's
+    # partial bar as its own row, so collapse each month to its latest close.
+    mclose = monthly.groupby(monthly.index.to_period("M")).last()
+    month_ret = mclose.pct_change(fill_method=None)
+    week_ret = close_all.resample("W-FRI").last().pct_change(fill_method=None)
 
     rows: list[dict] = []
     skipped: list[str] = []
@@ -239,18 +270,25 @@ def compute(uni: dict[str, dict], px: pd.DataFrame, ath: dict[str, float],
         for label, days in LOOKBACKS.items():
             rec[f"p{label}"] = _r(positive_days_pct(close, days), 1)
 
-        # --- beta vs SPY + annualised volatility, 1Y daily --------------------
+        # --- annualised volatility, 1Y daily ----------------------------------
         ret = close.pct_change(fill_method=None).dropna().tail(TRADING_DAYS_1Y)
         rec["vol"] = _r(ret.std() * math.sqrt(TRADING_DAYS_1Y) * 100.0) if len(ret) > 30 else None
-        if len(bench_ret) > 30 and len(ret) > 30:
-            j = pd.concat([ret, bench_ret], axis=1, join="inner").dropna()
-            if len(j) > 30:
-                bv = j.iloc[:, 1].var()
-                rec["beta"] = _r(j.iloc[:, 0].cov(j.iloc[:, 1]) / bv, 3) if bv else None
-            else:
-                rec["beta"] = None
+
+        # --- beta, 5-year monthly vs SPY --------------------------------------
+        # A 1-year daily beta swings with market regimes (in the 2025-26 AI
+        # rally it put ~95 S&P names below zero), so use the standard 5Y
+        # monthly beta: Yahoo's published figure, else our identical
+        # calculation, else weekly returns for listings under two years old.
+        calc = ols_beta(month_ret, sym, BETA_MONTHS, MIN_BETA_MONTHS)
+        rec["bcalc"] = _r(calc, 3)
+        pub = _f(q.get("beta"))
+        if pub is not None:
+            rec["beta"], rec["bsrc"] = _r(pub, 3), "yahoo"
+        elif calc is not None:
+            rec["beta"], rec["bsrc"] = _r(calc, 3), "5y-m"
         else:
-            rec["beta"] = None
+            wk = ols_beta(week_ret, sym, BETA_WEEKS, MIN_BETA_WEEKS)
+            rec["beta"], rec["bsrc"] = (_r(wk, 3), "wk") if wk is not None else (None, None)
 
         # --- fundamentals from the live quote ---------------------------------
         rec["mcap"] = _r(q.get("marketCap"), 0)
@@ -275,9 +313,9 @@ def main() -> int:
     symbols = sorted(uni)
     px = fetch_prices(symbols + [BENCHMARK])
     quotes = fetch_quotes(symbols)
-    ath = fetch_ath(symbols)
+    ath, monthly = fetch_monthly(symbols + [BENCHMARK])
 
-    rows = compute(uni, px, ath, quotes)
+    rows = compute(uni, px, ath, quotes, monthly)
     rows.sort(key=lambda r: (r.get("rAvg126") is None, -(r.get("rAvg126") or 0)))
 
     asof = str(px.index[-1].date())

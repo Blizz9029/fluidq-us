@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import os
 import sys
+from statistics import correlation
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -17,6 +18,8 @@ MAX_STALE_DAYS = 5        # covers a long weekend plus a market holiday
 MIN_COVERAGE = 0.95       # share of rows that must carry the core metrics
 CORE = ("px", "r12M", "r6M", "rAvg126", "mcap", "ema50", "sma50", "mdv")
 BELLWETHERS = ("AAPL", "MSFT", "NVDA", "AMZN", "JPM", "XOM", "JNJ")
+MAX_NEG_BETA = 10         # ~2% of the universe
+MIN_BETA_AGREEMENT = 0.90 # published vs calculated; measured 0.995 at launch
 
 
 def fail(msg: str) -> None:
@@ -49,6 +52,27 @@ def main() -> int:
         print(f"  {key:<9} coverage {cov:6.1%}")
         if cov < MIN_COVERAGE:
             fail(f"{key} present on only {cov:.1%} of rows (need {MIN_COVERAGE:.0%})")
+
+    # Beta. Published 5Y-monthly betas are almost all positive (3 of ~510 were
+    # negative when this was written). A jump in negatives means the source or
+    # the window has regressed to something regime-sensitive like 1Y daily.
+    betas = [r["beta"] for r in rows if r.get("beta") is not None]
+    neg = sum(1 for b in betas if b < 0)
+    print(f"  beta      coverage {len(betas) / len(rows):6.1%}   negatives {neg}")
+    if len(betas) / len(rows) < MIN_COVERAGE:
+        fail(f"beta present on only {len(betas) / len(rows):.1%} of rows")
+    if neg > MAX_NEG_BETA:
+        fail(f"{neg} negative betas (limit {MAX_NEG_BETA}) - beta source or window has regressed")
+
+    # Yahoo's published beta and our own 5Y-monthly calculation must agree;
+    # if they diverge, one of the two feeds is serving bad numbers.
+    pairs = [(r["beta"], r["bcalc"]) for r in rows
+             if r.get("bsrc") == "yahoo" and r.get("bcalc") is not None]
+    if len(pairs) >= 100:
+        agree = correlation([p for p, _ in pairs], [c for _, c in pairs])
+        print(f"  beta      published vs calculated corr {agree:.3f} on {len(pairs)} stocks")
+        if agree < MIN_BETA_AGREEMENT:
+            fail(f"published and calculated beta only correlate {agree:.3f} (need {MIN_BETA_AGREEMENT})")
 
     by_sym = {r["s"]: r for r in rows}
     missing = [s for s in BELLWETHERS if s not in by_sym]

@@ -409,7 +409,7 @@ tbody tr:last-child td{border-bottom:0}
         <label class="tg sm"><input type="checkbox" id="tb-on"><span class="track"></span><span class="lbl">Ignore top beta stocks</span></label>
         <label class="tg sm"><input type="checkbox" id="tv-on"><span class="track"></span><span class="lbl">Ignore top volatility stocks</span></label>
         <div class="field"><label for="top-pct">Top slice to drop (%)</label><input type="number" id="top-pct" value="10"></div>
-        <div class="hint">Beta and volatility are measured on one year of daily returns; beta is against SPY.</div>
+        <div class="hint">Beta is the standard 5-year monthly figure against the S&amp;P 500, as published by Yahoo Finance. Volatility is one year of daily returns, annualised.</div>
       </div>
     </section>
   </aside>
@@ -443,7 +443,7 @@ tbody tr:last-child td{border-bottom:0}
 
 <div class="foot">
   <p><b>How this maps to your NSE screen.</b> Every calculation is unchanged: absolute return over N months is the last close against the last close on or before the calendar lookback date; the ranking factor is the plain average of the 12-month and 6-month absolute returns; median daily volume is the median of close &#x00D7; volume over the last 252 sessions; percentage of positive days is the share of sessions with a positive close-to-close move. Prices are split-adjusted and dividend-unadjusted, so returns are price returns, matching NSE convention. Rupee-denominated thresholds were restated in dollars &#x2014; volume, market cap and price &#x2014; because the units differ; the formulas behind them did not change. The <b>Series EQ/BE</b> toggle has no US counterpart and is dropped.</p>
-  <p>Data: Yahoo Finance daily bars and quotes, refreshed after each US close. Beta is against SPY. For research and screening only &#x2014; not investment advice, and not a recommendation to buy or sell anything.</p>
+  <p>Data: Yahoo Finance daily bars and quotes, refreshed after each US close. Beta is 5-year monthly against the S&amp;P 500 &#x2014; Yahoo&#x2019;s published figure, or the same calculation run here where Yahoo has none (marked &#x2020;). For research and screening only &#x2014; not investment advice, and not a recommendation to buy or sell anything.</p>
 </div>
 
 <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
@@ -478,7 +478,7 @@ const FACTORS = [
   ["d52",     "Distance below one-year high"],
   ["p12M",    "Positive days % (1Y)"],
   ["vol",     "Volatility (1Y, annualised)"],
-  ["beta",    "Beta vs SPY"],
+  ["beta",    "Beta (5Y monthly)"],
   ["pe",      "P/E (trailing)"],
 ];
 
@@ -497,7 +497,7 @@ const COLS = [
   {k:"dATH",  t:"\u25BC ATH %"},
   {k:"d52",   t:"\u25BC 52W %"},
   {k:"mdv",   t:"Med $ vol"},
-  {k:"beta",  t:"Beta"},
+  {k:"beta",  t:"Beta 5Y"},
   {k:"vol",   t:"Vol %"},
   {k:"pe",    t:"P/E"},
 ];
@@ -695,7 +695,13 @@ function cell(r, c){
     case "_vsma": { const v = vsMA50(r); return `<td class="${signCls(v)}">${fmtPct(v)}</td>`; }
     case "dATH":  return `<td class="${r.dATH != null && r.dATH < 5 ? "up" : ""}">${r.dATH == null ? "\u2014" : "\u2212" + r.dATH.toFixed(1) + "%"}</td>`;
     case "d52":   return `<td class="${r.d52  != null && r.d52  < 5 ? "up" : ""}">${r.d52  == null ? "\u2014" : "\u2212" + r.d52.toFixed(1) + "%"}</td>`;
-    case "beta":  return `<td>${fmtNum(r.beta)}</td>`;
+    case "beta": {
+      if (r.bsrc === "yahoo" || r.beta == null) return `<td>${fmtNum(r.beta)}</td>`;
+      const why = r.bsrc === "wk"
+        ? "Weekly beta \u2014 under two years of trading history"
+        : "Calculated here (5Y monthly) \u2014 Yahoo publishes none for this stock";
+      return `<td title="${why}">${fmtNum(r.beta)}<sup class="rk">\u2020</sup></td>`;
+    }
     case "vol":   return `<td>${fmtNum(r.vol,1)}</td>`;
     case "pe":    return `<td class="${r.pe == null ? "nil" : ""}">${fmtNum(r.pe,1)}</td>`;
     default:      return `<td>\u2014</td>`;
@@ -825,10 +831,10 @@ $("btn-tv").addEventListener("click", () => {
 $("btn-csv").addEventListener("click", async () => {
   const head = ["Rank","Ticker","Company","Sector","Indices","Price","MarketCap","Ret1Y","Ret9M","Ret6M","Ret3M","Ret1M",
                 "AvgRet12_6","EMA50","SMA50","EMA200","SMA200","BelowATH","Below52WHigh","MedDailyDollarVol",
-                "PosDays1Y","Beta","Volatility","PE"];
+                "PosDays1Y","Beta5Y","BetaSource","Volatility","PE"];
   const line = (r,i) => [i+1, r.s, `"${(r.n||"").replace(/"/g,'""')}"`, `"${r.sec||""}"`, (r.ix||[]).join("|"),
     r.px, r.mcap, r.r12M, r.r9M, r.r6M, r.r3M, r.r1M, r.rAvg126, r.ema50, r.sma50, r.ema200, r.sma200,
-    r.dATH, r.d52, r.mdv, r.p12M, r.beta, r.vol, r.pe].map(v => v == null ? "" : v).join(",");
+    r.dATH, r.d52, r.mdv, r.p12M, r.beta, r.bsrc, r.vol, r.pe].map(v => v == null ? "" : v).join(",");
   const csv = [head.join(","), ...current.map(line)].join("\n");
   copyOut(csv, current.length + " rows copied as CSV");
 });
